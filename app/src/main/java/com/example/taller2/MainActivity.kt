@@ -35,6 +35,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import android.content.pm.PackageManager
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.sp
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.MapStyleOptions
@@ -180,8 +182,8 @@ fun MediaPickerScreen(onBack: () -> Unit) {
         ) {
             Text("Foto")
             Spacer(modifier = Modifier.width(8.dp))
-            Switch(checked = isPhoto, onCheckedChange = {
-                isPhoto = it
+            Switch(checked = !isPhoto, onCheckedChange = { isChecked ->
+                isPhoto = !isChecked
                 selectedMediaUri = null
                 tempMediaUri.value = null
             })
@@ -215,30 +217,45 @@ fun MediaPickerScreen(onBack: () -> Unit) {
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-
-        Button(onClick = {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
-                != PackageManager.PERMISSION_GRANTED
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            Button(
+                onClick = {
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                        != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    } else {
+                        val newUri = createTempFileUri(context, if (isPhoto) ".jpg" else ".mp4")
+                        tempMediaUri.value = newUri
+                        selectedMediaUri = null
+                        if (isPhoto) takePictureLauncher.launch(newUri)
+                        else captureVideoLauncher.launch(newUri)
+                    }
+                },
+                modifier = Modifier.weight(2f).padding(end = 6.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
             ) {
-                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-            } else {
-                val newUri = createTempFileUri(context, if (isPhoto) ".jpg" else ".mp4")
-                tempMediaUri.value = newUri
-                selectedMediaUri = null
-                if (isPhoto) takePictureLauncher.launch(newUri)
-                else captureVideoLauncher.launch(newUri)
+                Text(if (isPhoto) "Tomar Foto" else "Grabar Video",
+                    textAlign = TextAlign.Center,
+                    style = LocalTextStyle.current.copy(fontSize = 14.sp))
             }
-        }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (isPhoto) "Tomar Foto" else "Grabar Video")
+
+            Button(
+                onClick = {
+                    pickMediaLauncher.launch(if (isPhoto) "image/*" else "video/*")
+                },
+                modifier = Modifier.weight(2f).padding(start = 6.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+            ) {
+                Text(if (isPhoto) "Seleccionar Foto" else "Seleccionar Video",
+                    textAlign = TextAlign.Center,
+                    style = LocalTextStyle.current.copy(fontSize = 14.sp))
+            }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Button(onClick = {
-            pickMediaLauncher.launch(if (isPhoto) "image/*" else "video/*")
-        }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (isPhoto) "Seleccionar Foto" else "Seleccionar Video")
-        }
     }
 }
 
