@@ -48,6 +48,14 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.*
+import com.google.android.gms.location.*
+import android.os.Looper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import okhttp3.OkHttpClient
+import okhttp3.Request
+
 
 data class LongClickMarker(val position: LatLng, val title: String)
 
@@ -64,16 +72,71 @@ fun ambientLightSensorFlow(context: Context): Flow<Float> = callbackFlow {
     awaitClose { sensorManager.unregisterListener(listener) }
 }
 
-fun simulatedLocationFlow(): Flow<Location> = flow {
-    val location = Location("simulated").apply {
-        latitude = 4.60971
-        longitude = -74.08175
+fun realLocationFlow(context: Context): Flow<Location> = callbackFlow {
+    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+
+    val locationRequest = LocationRequest.Builder(
+        Priority.PRIORITY_HIGH_ACCURACY, 3000L // cada 3 segundos
+    ).build()
+
+    val locationCallback = object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) {
+            result.locations.forEach { trySend(it) }
+        }
     }
-    while (true) {
-        emit(location)
-        delay(2000)
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+        != PackageManager.PERMISSION_GRANTED) {
+        close()  // Cierra el flujo para evitar errores
+        return@callbackFlow
+    }
+
+    fusedLocationClient.requestLocationUpdates(
+        locationRequest,
+        locationCallback,
+        Looper.getMainLooper()
+    )
+
+    awaitClose {
+        fusedLocationClient.removeLocationUpdates(locationCallback)
     }
 }
+
+fun decodePolyline(encoded: String): List<LatLng> {
+    val poly = mutableListOf<LatLng>()
+    var index = 0
+    val len = encoded.length
+    var lat = 0
+    var lng = 0
+
+    while (index < len) {
+        var b: Int
+        var shift = 0
+        var result = 0
+        do {
+            b = encoded[index++].code - 63
+            result = result or ((b and 0x1f) shl shift)
+            shift += 5
+        } while (b >= 0x20)
+        val dlat = if ((result and 1) != 0) (result shr 1).inv() else (result shr 1)
+        lat += dlat
+
+        shift = 0
+        result = 0
+        do {
+            b = encoded[index++].code - 63
+            result = result or ((b and 0x1f) shl shift)
+            shift += 5
+        } while (b >= 0x20)
+        val dlng = if ((result and 1) != 0) (result shr 1).inv() else (result shr 1)
+        lng += dlng
+
+        val latLng = LatLng(lat.toDouble() / 1E5, lng.toDouble() / 1E5)
+        poly.add(latLng)
+    }
+
+    return poly
+}
+
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -269,6 +332,9 @@ fun MapScreen(onBack: () -> Unit) {
     val longClickMarkers = remember { mutableStateListOf<LongClickMarker>() }
     val coroutineScope = rememberCoroutineScope()
     var trackingUser by remember { mutableStateOf(false) }
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val drawnRoute = remember { mutableStateListOf<LatLng>() }
+
 
     val ambientLight = ambientLightSensorFlow(context).collectAsState(initial = 100f).value
     val mapStyleJson = if (ambientLight < 10f)
@@ -279,8 +345,19 @@ fun MapScreen(onBack: () -> Unit) {
         position = CameraPosition.fromLatLngZoom(currentLocation, 15f)
     }
 
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            // Aquí podrías activar la obtención de la ubicación real
+        } else {
+            Toast.makeText(context, "Permiso de ubicación denegado", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     LaunchedEffect(Unit) {
-        simulatedLocationFlow().collect { location ->
+        locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        realLocationFlow(context).collect { location ->
             val newLatLng = LatLng(location.latitude, location.longitude)
             currentLocation = newLatLng
             routePoints.add(newLatLng)
@@ -299,6 +376,11 @@ fun MapScreen(onBack: () -> Unit) {
             searchedLocation = latLng
             trackingUser = false
             cameraPositionState.move(CameraUpdateFactory.newLatLngZoom(latLng, 16f))
+            coroutineScope.launch {
+                val route = fetchRoutePolyline(currentLocation, latLng, "AIzaSyDKjhqaBtcvLF4zW_VsHkXZYi3y4lCWeh0")
+                drawnRoute.clear()
+                drawnRoute.addAll(route)
+            }
         } else {
             Toast.makeText(context, "Dirección no encontrada", Toast.LENGTH_SHORT).show()
         }
@@ -320,6 +402,12 @@ fun MapScreen(onBack: () -> Unit) {
                             addresses[0].getAddressLine(0) else "Dirección no encontrada"
                         longClickMarkers.add(LongClickMarker(clickedLatLng, title))
                         cameraPositionState.move(CameraUpdateFactory.newLatLngZoom(clickedLatLng, 16f))
+                        coroutineScope.launch {
+                            val route = fetchRoutePolyline(currentLocation, clickedLatLng, "AIzaSyDKjhqaBtcvLF4zW_VsHkXZYi3y4lCWeh0")
+                            drawnRoute.clear()
+                            drawnRoute.addAll(route)
+                        }
+
                     }
                 }
             ) {
@@ -331,6 +419,15 @@ fun MapScreen(onBack: () -> Unit) {
                 longClickMarkers.forEach { marker ->
                     Marker(state = MarkerState(position = marker.position), title = marker.title)
                 }
+
+                if (drawnRoute.size > 1) {
+                    Polyline(
+                        points = drawnRoute.toList(),
+                        color = Color.Green,
+                        width = 8f
+                    )
+                }
+
             }
 
             Column(
@@ -382,3 +479,30 @@ fun MapScreen(onBack: () -> Unit) {
         }
     }
 }
+
+suspend fun fetchRoutePolyline(
+    origin: LatLng,
+    destination: LatLng,
+    apiKey: String
+): List<LatLng> {
+    val url = "https://maps.googleapis.com/maps/api/directions/json?" +
+            "origin=${origin.latitude},${origin.longitude}" +
+            "&destination=${destination.latitude},${destination.longitude}" +
+            "&key=$apiKey"
+
+    val client = OkHttpClient()
+    val request = Request.Builder().url(url).build()
+
+    return withContext(Dispatchers.IO) {
+        val response = client.newCall(request).execute()
+        val body = response.body?.string() ?: return@withContext emptyList()
+        val json = JSONObject(body)
+        val routes = json.getJSONArray("routes")
+        if (routes.length() == 0) return@withContext emptyList()
+        val overviewPolyline = routes.getJSONObject(0)
+            .getJSONObject("overview_polyline")
+            .getString("points")
+        decodePolyline(overviewPolyline)
+    }
+}
+

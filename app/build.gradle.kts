@@ -67,6 +67,8 @@ dependencies {
     implementation ("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.1")
     implementation ("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.1")
     implementation ("androidx.compose.ui:ui-text:1.6.0") // o el que uses
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.json:json:20210307")
 
 
 
